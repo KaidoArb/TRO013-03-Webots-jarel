@@ -100,3 +100,9 @@ Hindamine otsib `folkrace_driver.py` faili **kõikidest kaustadest** (nimi loeb,
 | Tingimuse loogika olemas (takistuse vältimine) | 10 p |
 | `package.xml` ja `setup.py` olemas | 5 p |
 | TODO-d lahendatud | 10 p |
+
+---
+
+## Küsimused ja lisainfo
+
+Kui midagi on ebaselge või vajad täiendavat selgitust, vaata Moodle kursuse **Moodul 03: Roboti simulatsioon Webotsis** peatükki — seal on üksikasjalikud juhised, näidiskood ja selgitused.
