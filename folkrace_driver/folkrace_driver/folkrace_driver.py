@@ -1,104 +1,210 @@
-"""Moodul 03: Automaatne folkrace sõitmine.
-
-Ülesanne:
-  Kirjuta reaktiivne sõlm, mis sõidab folkrace rajal automaatselt
-  ilma seintesse põrkamata. Robot loeb lidarit ja otsustab iga
-  mõõtmise põhjal kuhu sõita.
-
-Nõuded:
-  - Robot teeb vähemalt ÜHE TÄISRINGI
-  - Robot ei põrka seintesse
-  - Robot suudab üle SILLA minna
-
-Käivita:
-  Terminal 1: ros2 launch yahboom_webots webots.launch.py
-  Terminal 2: ros2 run folkrace_driver folkrace_driver
-
-Lidar indeksid (720 kiirt, 360°):
-  ranges[0]   = -180° = otse TAGA
-  ranges[180] =  -90° = PAREMALE
-  ranges[360] =    0° = otse ETTE
-  ranges[540] =  +90° = VASAKULE
-  ranges[719] = +180° = otse TAGA
-
-  Ette ±15° = indeksid 330..390 (ümber 360)
-"""
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist
-
-
-class FolkraceDriver(Node):
-
+from std_msgs.msg import String
+import math, time, signal, statistics
+ 
+ 
+Q1 = 0.4
+Q2 = 0.75
+Q3 = 0.28
+Q4 = 0.22
+Q5 = -0.13
+Q6 = 0.10
+Q7 = 20
+Q8 = 5
+Q9 = 4
+Q10 = 0.18
+Q11 = 0.25
+Q12 = 0.033
+Q13 = 0.083
+Q14 = 10.5
+ 
+ 
+class _Nx(Node):
     def __init__(self):
-        super().__init__('folkrace_driver')
-
-        # Publisher liikumiskäskude jaoks
-        self.pub = self.create_publisher(Twist, '/cmd_vel', 10)
-
-        # Subscriber lidari andmete jaoks
-        self.sub = self.create_subscription(
-            LaserScan, '/scan', self.scan_callback, 10)
-
-        self.get_logger().info('Folkrace driver käivitatud!')
-
-    def scan_callback(self, msg):
-        ranges = msg.ranges
-        n = len(ranges)
-
-        # ----------------------------------------------------------
-        # 1. Loe lidar andmeid: ees, vasakul, paremal
-        # ----------------------------------------------------------
-
-        # TODO: arvuta kaugus ETTE (±15° ehk ~30 kiirt ette suunas)
-        #   Indeksid: ranges[n//2-15:n//2+15] (ümber keskpunkti)
-        #   Kasuta min() et leida lähim takistus
-        #   Filtreeri välja inf ja liiga lähedad (< 0.12m)
-        #
-        # Vihje:
-        #   mid = n // 2
-        #   front_ranges = ranges[mid-15:mid+15]
-        #   front = min((r for r in front_ranges if 0.12 < r < 8.0), default=8.0)
-        front = 8.0  # TODO: asenda seda üleval oleva koodiga
-
-        # TODO: arvuta kaugus VASAKULE (~90° ehk indeksid 3*n//4 - 10 .. 3*n//4 + 10)
-        # Vihje: left = min((r for r in ranges[530:550] if 0.12 < r < 8.0), default=8.0)
-        left = 8.0  # TODO: asenda
-
-        # TODO: arvuta kaugus PAREMALE (~-90° ehk indeksid n//4 - 10 .. n//4 + 10)
-        # Vihje: right = min((r for r in ranges[170:190] if 0.12 < r < 8.0), default=8.0)
-        right = 8.0  # TODO: asenda
-
-        # ----------------------------------------------------------
-        # 2. Otsusta kuhu sõita
-        # ----------------------------------------------------------
+        super().__init__('nx_runtime')
+        self.create_subscription(LaserScan, '/scan', self._h, 10)
+        self._p0 = self.create_publisher(Twist,  '/cmd_vel',       10)
+        self._p1 = self.create_publisher(String, '/folkrace_olek', 10)
+        self._z0 = 0.0
+        self._z1 = 0
+        self._z2 = 0
+        self._z3 = 0
+        self.get_logger().info('nx_runtime active')
+ 
+    def _emit(self, s: str):
+        self._p1.publish(String(data=s))
+ 
+    def _sm(self, buf, a0: float, a1: float) -> float:
+        n = len(buf)
+        if not n:
+            return float('inf')
+        _ki = lambda k: int((k + 180.0) / 360.0 * n) % n
+        i0, i1 = _ki(a0), _ki(a1)
+        sl = buf[i0:i1+1] if i0 <= i1 else list(buf[i0:]) + list(buf[:i1+1])
+        v = sorted(r for r in sl if not math.isnan(r) and not math.isinf(r) and 0.12 <= r <= 8.0)
+        if not v:
+            return float('inf')
+        return v[max(0, int(len(v) * 0.20) - 1)]
+ 
+    def _xd(self, raw):
+        n = len(raw)
+        sr = math.radians(180.0 / n)
+        out = list(raw)
+        for i in range(n - 1):
+            dl, dr = raw[i], raw[i+1]
+            if abs(dl - dr) < Q11:
+                continue
+            if dl < dr:
+                d = dl
+                if d < 0.15:
+                    continue
+                w = int(math.asin(min(1.0, Q10/d)) / sr) + 1
+                for k in range(i+1, min(i+1+w, n)):
+                    if out[k] > d: out[k] = d
+                if i > 0 and out[i-1] > d*1.1: out[i-1] = d*1.1
+            else:
+                d = dr
+                if d < 0.15:
+                    continue
+                w = int(math.asin(min(1.0, Q10/d)) / sr) + 1
+                for k in range(max(0, i+1-w), i+1):
+                    if out[k] > d: out[k] = d
+                if i+2 < n and out[i+2] > d*1.1: out[i+2] = d*1.1
+        return out
+ 
+    def _cl(self, u: float, w: float):
+        lim = (abs(u) + abs(w)*Q13) / Q12
+        if lim > Q14:
+            s = Q14 / lim
+            if abs(u) < 0.05:
+                w *= s
+            else:
+                u *= s
+                w *= s
+        return u, w
+ 
+    def _h(self, msg: LaserScan):
+        buf = list(msg.ranges)
+        f  = self._sm(buf, -20,   20)
+        lf = self._sm(buf,  60,  120)
+        rf = self._sm(buf, -120, -60)
+        u, w = self._calc(buf, f, lf, rf)
+        u, w = self._cl(u, w)
         cmd = Twist()
-
-        # TODO: kirjuta reaktiivne loogika
-        #
-        # Põhimõte:
-        #   - Kui ees on vaba (front > 0.5m): sõida edasi
-        #     * cmd.linear.x = 0.3  (edasi kiirus m/s)
-        #     * Hoia raja keskel: kui left > right, kalluta vasakule
-        #       cmd.angular.z = 0.2 (positiivne = vasakule)
-        #
-        #   - Kui ees on takistus (front <= 0.5m): peatu ja pöördu
-        #     * cmd.linear.x = 0.0
-        #     * Pöördu vabama külje poole:
-        #       cmd.angular.z = 0.8 kui left > right, muidu -0.8
-        #
-        # Vihje: alusta lihtsa if/else'iga, siis täiusta
-
-        # ----------------------------------------------------------
-        # 3. Saada käsk robotile
-        # ----------------------------------------------------------
-        self.pub.publish(cmd)
-
-
-def main(args=None):
-    rclpy.init(args=args)
-    node = FolkraceDriver()
-    rclpy.spin(node)
-    node.destroy_node()
+        cmd.linear.x  = float(max(-Q1, min(Q1, u)))
+        cmd.angular.z = float(max(-2.0, min(2.0, w)))
+        self._p0.publish(cmd)
+        self._z1 += 1
+        if not self._z1 % 32:
+            self.get_logger().info(
+                f'f={f:.2f}  lf={lf:.2f}  rf={rf:.2f}  u={u:.2f}  w={w:.2f}'
+            )
+ 
+    def _calc(self, buf, f, lf, rf):
+        n = len(buf)
+        if not n:
+            return Q1, 0.0
+ 
+        self._z2 = self._z2 + 1 if f < Q4 else 0
+ 
+        a, b = n//4, 3*n//4
+        fb = buf[a:b]
+        m  = len(fb)
+        ss = m // Q7
+        if not ss:
+            return Q1, 0.0
+ 
+        bd = []
+        for i in range(Q7):
+            sl = fb[i*ss : i*ss+ss]
+            v  = sorted(r for r in sl if not (math.isinf(r) or math.isnan(r)) and r > 0.12)
+            bd.append(v[max(0, int(len(v)*0.25)-1)] if v else 8.0)
+ 
+        bd = self._xd(bd)
+ 
+        bi, bv = Q7//2, 0.0
+        for i in range(Q7):
+            nv = bd[i-1] if i > 0 else bd[i]
+            np = bd[i+1] if i < Q7-1 else bd[i]
+            if nv < 0.30 and np < 0.30:
+                continue
+            if bd[i] > bv:
+                bv, bi = bd[i], i
+ 
+        if bv == 0.0:
+            bi = max(range(Q7), key=lambda i: bd[i])
+            bv = bd[bi]
+ 
+        self._z3 = self._z3 + 1 if bv < 0.4 else 0
+ 
+        ba = -((bi / Q7) - 0.5) * 180.0
+ 
+        pi2 = int(((-self._z0 / 180.0) + 0.5) * Q7)
+        pi2 = max(0, min(Q7-1, pi2))
+        pv  = bd[pi2]
+ 
+        if bv < pv*1.15 and pv > 0.5:
+            ba = self._z0
+        self._z0 = ba
+ 
+        if self._z2 >= Q8:
+            sd = 1.0 if ba >= 0 else -1.0
+            self._emit(f'REV {"L" if sd>0 else "R"}')
+            return Q5, sd*Q2
+ 
+        br = math.radians(ba)
+ 
+        if self._z3 >= Q9 and bv < 0.4:
+            sd = 1.0 if ba >= 0 else -1.0
+            self._emit(f'STUCK {"L" if sd>0 else "R"}')
+            return 0.0, sd*Q2
+        elif bv < 0.4:
+            self._emit(f'SLOW {ba:+.0f}')
+            u, w = Q6, (1.0 if ba >= 0 else -1.0)*Q2*0.5
+        elif abs(ba) > 45:
+            u = Q1*0.18
+            w = Q2*0.85*(1.0 if ba>0 else -1.0)
+        elif abs(ba) > 15:
+            t  = (abs(ba)-15.0)/30.0
+            sd = 1.0 if ba>0 else -1.0
+            u  = Q1*(0.5-0.2*t)
+            w  = max(-Q2, min(Q2, sd*Q2*(0.5+0.5*t)))
+        else:
+            u = Q1
+            w = max(-Q2*0.28, min(Q2*0.28, br*1.0))
+ 
+        if lf < Q3:
+            w -= math.sqrt((Q3-lf)/Q3)*Q2*0.5
+        if rf < Q3:
+            w += math.sqrt((Q3-rf)/Q3)*Q2*0.5
+ 
+        w = max(-Q2, min(Q2, w))
+        self._emit(f'B={ba:+.0f} d={bv:.1f} u={u:.2f} w={w:+.2f}')
+        return u, w
+ 
+ 
+def main():
+    rclpy.init()
+    nd = _Nx()
+    go = True
+ 
+    def _bye(s, f):
+        nonlocal go
+        go = False
+    signal.signal(signal.SIGINT, _bye)
+ 
+    while go:
+        rclpy.spin_once(nd, timeout_sec=0.1)
+ 
+    z = Twist()
+    [nd._p0.publish(z) or time.sleep(0.05) for _ in range(10)]
+    nd.destroy_node()
     rclpy.shutdown()
+    print('\nHalted.')
+ 
+ 
+if __name__ == '__main__':
+    main()
