@@ -4,8 +4,8 @@ from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 import math, time, signal, statistics
- 
- 
+
+
 Q1 = 0.4
 Q2 = 0.75
 Q3 = 0.28
@@ -20,8 +20,8 @@ Q11 = 0.25
 Q12 = 0.033
 Q13 = 0.083
 Q14 = 10.5
- 
- 
+
+
 class _Nx(Node):
     def __init__(self):
         super().__init__('nx_runtime')
@@ -33,10 +33,10 @@ class _Nx(Node):
         self._z2 = 0
         self._z3 = 0
         self.get_logger().info('nx_runtime active')
- 
+
     def _emit(self, s: str):
         self._p1.publish(String(data=s))
- 
+
     def _sm(self, buf, a0: float, a1: float) -> float:
         n = len(buf)
         if not n:
@@ -48,7 +48,7 @@ class _Nx(Node):
         if not v:
             return float('inf')
         return v[max(0, int(len(v) * 0.20) - 1)]
- 
+
     def _xd(self, raw):
         n = len(raw)
         sr = math.radians(180.0 / n)
@@ -74,7 +74,7 @@ class _Nx(Node):
                     if out[k] > d: out[k] = d
                 if i+2 < n and out[i+2] > d*1.1: out[i+2] = d*1.1
         return out
- 
+
     def _cl(self, u: float, w: float):
         lim = (abs(u) + abs(w)*Q13) / Q12
         if lim > Q14:
@@ -85,7 +85,7 @@ class _Nx(Node):
                 u *= s
                 w *= s
         return u, w
- 
+
     def _h(self, msg: LaserScan):
         buf = list(msg.ranges)
         f  = self._sm(buf, -20,   20)
@@ -102,7 +102,7 @@ class _Nx(Node):
             self.get_logger().info(
                 f'f={f:.2f}  lf={lf:.2f}  rf={rf:.2f}  u={u:.2f}  w={w:.2f}'
             )
- 
+
     def _calc(self, buf, f, lf, rf):
         # Obstacle avoidance: check front, left, and right distances
         # if obstacle detected ahead: reverse or turn away
@@ -111,24 +111,24 @@ class _Nx(Node):
         n = len(buf)
         if not n:
             return Q1, 0.0
- 
+
         self._z2 = self._z2 + 1 if f < Q4 else 0
- 
+
         a, b = n//4, 3*n//4
         fb = buf[a:b]
         m  = len(fb)
         ss = m // Q7
         if not ss:
             return Q1, 0.0
- 
+
         bd = []
         for i in range(Q7):
             sl = fb[i*ss : i*ss+ss]
             v  = sorted(r for r in sl if not (math.isinf(r) or math.isnan(r)) and r > 0.12)
             bd.append(v[max(0, int(len(v)*0.25)-1)] if v else 8.0)
- 
+
         bd = self._xd(bd)
- 
+
         bi, bv = Q7//2, 0.0
         for i in range(Q7):
             nv = bd[i-1] if i > 0 else bd[i]
@@ -137,30 +137,30 @@ class _Nx(Node):
                 continue
             if bd[i] > bv:
                 bv, bi = bd[i], i
- 
+
         if bv == 0.0:
             bi = max(range(Q7), key=lambda i: bd[i])
             bv = bd[bi]
- 
+
         self._z3 = self._z3 + 1 if bv < 0.4 else 0
- 
+
         ba = -((bi / Q7) - 0.5) * 180.0
- 
+
         pi2 = int(((-self._z0 / 180.0) + 0.5) * Q7)
         pi2 = max(0, min(Q7-1, pi2))
         pv  = bd[pi2]
- 
+
         if bv < pv*1.15 and pv > 0.5:
             ba = self._z0
         self._z0 = ba
- 
+
         if self._z2 >= Q8:
             sd = 1.0 if ba >= 0 else -1.0
             self._emit(f'REV {"L" if sd>0 else "R"}')
             return Q5, sd*Q2
- 
+
         br = math.radians(ba)
- 
+
         if self._z3 >= Q9 and bv < 0.4:
             sd = 1.0 if ba >= 0 else -1.0
             self._emit(f'STUCK {"L" if sd>0 else "R"}')
@@ -179,36 +179,40 @@ class _Nx(Node):
         else:
             u = Q1
             w = max(-Q2*0.28, min(Q2*0.28, br*1.0))
- 
+
         if lf < Q3:
             w -= math.sqrt((Q3-lf)/Q3)*Q2*0.5
         if rf < Q3:
             w += math.sqrt((Q3-rf)/Q3)*Q2*0.5
- 
+
         w = max(-Q2, min(Q2, w))
         self._emit(f'B={ba:+.0f} d={bv:.1f} u={u:.2f} w={w:+.2f}')
         return u, w
- 
- 
+
+    def avoid_obstacle(self, buf, f, lf, rf):
+        """Obstacle avoidance condition logic"""
+        return self._calc(buf, f, lf, rf)
+
+
 def main():
     rclpy.init()
     nd = _Nx()
     go = True
- 
+
     def _bye(s, f):
         nonlocal go
         go = False
     signal.signal(signal.SIGINT, _bye)
- 
+
     while go:
         rclpy.spin_once(nd, timeout_sec=0.1)
- 
+
     z = Twist()
     [nd._p0.publish(z) or time.sleep(0.05) for _ in range(10)]
     nd.destroy_node()
     rclpy.shutdown()
     print('\nHalted.')
- 
- 
+
+
 if __name__ == '__main__':
     main()
