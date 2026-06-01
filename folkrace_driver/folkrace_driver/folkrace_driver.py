@@ -104,6 +104,10 @@ class _Nx(Node):
             )
  
     def _calc(self, buf, f, lf, rf):
+        # Obstacle avoidance: check front, left, and right distances
+        # if obstacle detected ahead: reverse or turn away
+        # if obstacle on left: steer right
+        # if obstacle on right: steer left
         n = len(buf)
         if not n:
             return Q1, 0.0
