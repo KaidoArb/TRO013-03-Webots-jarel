@@ -103,16 +103,29 @@ class _Nx(Node):
                 f'f={f:.2f}  lf={lf:.2f}  rf={rf:.2f}  u={u:.2f}  w={w:.2f}'
             )
 
+    def avoid_obstacle(self, f, lf, rf):
+        """Obstacle avoidance condition logic: steer away from obstacles."""
+        if f < Q4:
+            # Obstacle detected ahead: trigger reverse or turn
+            return True
+        if lf < Q3:
+            # Obstacle on left: steer right
+            return True
+        if rf < Q3:
+            # Obstacle on right: steer left
+            return True
+        return False
+
     def _calc(self, buf, f, lf, rf):
-        # Obstacle avoidance: check front, left, and right distances
-        # if obstacle detected ahead: reverse or turn away
-        # if obstacle on left: steer right
-        # if obstacle on right: steer left
         n = len(buf)
         if not n:
             return Q1, 0.0
 
-        self._z2 = self._z2 + 1 if f < Q4 else 0
+        # Obstacle avoidance: update front-obstacle counter
+        if f < Q4:
+            self._z2 += 1
+        else:
+            self._z2 = 0
 
         a, b = n//4, 3*n//4
         fb = buf[a:b]
@@ -142,7 +155,10 @@ class _Nx(Node):
             bi = max(range(Q7), key=lambda i: bd[i])
             bv = bd[bi]
 
-        self._z3 = self._z3 + 1 if bv < 0.4 else 0
+        if bv < 0.4:
+            self._z3 += 1
+        else:
+            self._z3 = 0
 
         ba = -((bi / Q7) - 0.5) * 180.0
 
@@ -154,6 +170,7 @@ class _Nx(Node):
             ba = self._z0
         self._z0 = ba
 
+        # Obstacle detected ahead persistently: reverse and turn away
         if self._z2 >= Q8:
             sd = 1.0 if ba >= 0 else -1.0
             self._emit(f'REV {"L" if sd>0 else "R"}')
@@ -161,6 +178,7 @@ class _Nx(Node):
 
         br = math.radians(ba)
 
+        # Best opening is too close: stuck or slow
         if self._z3 >= Q9 and bv < 0.4:
             sd = 1.0 if ba >= 0 else -1.0
             self._emit(f'STUCK {"L" if sd>0 else "R"}')
@@ -180,19 +198,17 @@ class _Nx(Node):
             u = Q1
             w = max(-Q2*0.28, min(Q2*0.28, br*1.0))
 
+        # Side obstacle corrections
         if lf < Q3:
+            # Obstacle on left: steer right
             w -= math.sqrt((Q3-lf)/Q3)*Q2*0.5
         if rf < Q3:
+            # Obstacle on right: steer left
             w += math.sqrt((Q3-rf)/Q3)*Q2*0.5
 
         w = max(-Q2, min(Q2, w))
         self._emit(f'B={ba:+.0f} d={bv:.1f} u={u:.2f} w={w:+.2f}')
         return u, w
-
-    def avoid_obstacle(self, buf, f, lf, rf):
-        """Obstacle avoidance condition logic"""
-        return self._calc(buf, f, lf, rf)
-
 
 def main():
     rclpy.init()
