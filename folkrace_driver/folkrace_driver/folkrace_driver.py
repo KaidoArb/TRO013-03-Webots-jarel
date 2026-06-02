@@ -88,10 +88,10 @@ class _Nx(Node):
 
     def _h(self, msg: LaserScan):
         buf = list(msg.ranges)
-        f  = self._sm(buf, -20,   20)
-        lf = self._sm(buf,  60,  120)
-        rf = self._sm(buf, -120, -60)
-        u, w = self._calc(buf, f, lf, rf)
+        front = self._sm(buf, -20,   20)
+        left = self._sm(buf,  60,  120)
+        right = self._sm(buf, -120, -60)
+        u, w = self._calc(buf, front, left, right)
         u, w = self._cl(u, w)
         cmd = Twist()
         cmd.linear.x  = float(max(-Q1, min(Q1, u)))
@@ -100,29 +100,29 @@ class _Nx(Node):
         self._z1 += 1
         if not self._z1 % 32:
             self.get_logger().info(
-                f'f={f:.2f}  lf={lf:.2f}  rf={rf:.2f}  u={u:.2f}  w={w:.2f}'
+                f'f={front:.2f}  left={left:.2f}  right={right:.2f}  u={u:.2f}  w={w:.2f}'
             )
 
-    def avoid_obstacle(self, f, lf, rf):
+    def avoid_obstacle(self, front, left, right):
         """Obstacle avoidance condition logic: steer away from obstacles."""
-        if f < Q4:
+        if front < Q4:
             # Obstacle detected ahead: trigger reverse or turn
             return True
-        if lf < Q3:
+        if left < Q3:
             # Obstacle on left: steer right
             return True
-        if rf < Q3:
+        if right < Q3:
             # Obstacle on right: steer left
             return True
         return False
 
-    def _calc(self, buf, f, lf, rf):
+    def _calc(self, buf, front, left, right):
         n = len(buf)
         if not n:
             return Q1, 0.0
 
         # Obstacle avoidance: update front-obstacle counter
-        if f < Q4:
+        if front < Q4:
             self._z2 += 1
         else:
             self._z2 = 0
@@ -199,16 +199,17 @@ class _Nx(Node):
             w = max(-Q2*0.28, min(Q2*0.28, br*1.0))
 
         # Side obstacle corrections
-        if lf < Q3:
+        if left < Q3:
             # Obstacle on left: steer right
-            w -= math.sqrt((Q3-lf)/Q3)*Q2*0.5
-        if rf < Q3:
+            w -= math.sqrt((Q3-left)/Q3)*Q2*0.5
+        if right < Q3:
             # Obstacle on right: steer left
-            w += math.sqrt((Q3-rf)/Q3)*Q2*0.5
+            w += math.sqrt((Q3-right)/Q3)*Q2*0.5
 
         w = max(-Q2, min(Q2, w))
         self._emit(f'B={ba:+.0f} d={bv:.1f} u={u:.2f} w={w:+.2f}')
         return u, w
+
 
 def main():
     rclpy.init()
